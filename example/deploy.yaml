@@ -1,0 +1,101 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: registry-cred-generator
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: registry-cred-generator
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs: ["get", "create"]
+
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1beta1
+metadata:
+  name: registry-cred-generator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: registry-cred-generator
+subjects:
+- kind: ServiceAccount
+  name: registry-cred-generator
+  namespace: default
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry-deployment
+  labels:
+    app: registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry
+  template:
+    metadata:
+      labels:
+        app: registry
+    spec:
+      containers:
+      - name: registry
+        image: registry:2
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5000
+          hostPort: 5192
+      - name: cred-generator
+        image: knorg/docker-registry-credential-generator:1.0.0
+        env:
+        - name: MY_POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: HTPASSWD_SECRET_NAME
+          value: docker-registry-htpasswd
+        - name: PASSWORD_SECRET_NAME
+          value: docker-registry-password
+        - name: REGISTRY_USERNAME
+          value: registry
+      serviceAccountName: registry-cred-generator
+
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: registry
+spec:
+  selector:
+    app: registry
+  ports:
+  - port: 5000
+
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: my-registry
+  annotations:
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: docker-registry-htpasswd
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required - Docker-Registry"
+    # request body maximum allowed size unlimited
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+spec:
+  rules:
+    - host: localhost
+      http:
+        paths:
+        - backend:
+            serviceName: registry
+            servicePort: 5000
